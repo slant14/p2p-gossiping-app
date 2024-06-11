@@ -6,16 +6,17 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::broadcast;
 use tokio::time::interval;
 
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
 struct Message {
     content: String,
     from: SocketAddr,
+    timestamp: u64,
 }
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -76,8 +77,9 @@ async fn main() {
             let message = Message {
                 content: rng.gen::<u32>().to_string(),
                 from: addr,
+                timestamp: current_timestamp(),
             };
-            let message_json = serde_json::to_string(&message).unwrap();
+            let message_json = serde_json::to_string(&message).unwrap() + "\n"; // Add a delimiter
             let peers = peers_clone.lock().unwrap().clone();
 
             println!(
@@ -86,20 +88,35 @@ async fn main() {
             );
 
             for peer in peers {
-                let _ = tx_clone.send((message_json.clone(), peer));
+                if peer != addr {
+                    let _ = tx_clone.send((message_json.clone(), peer));
+                }
             }
         }
     });
 
-    let mut rx = tx.subscribe();
+    // Show received messages in a separate task to allow for reset of the subscription
+    tokio::spawn(show_received_messages(addr, tx.subscribe()));
+
+    // To keep the main function alive
+    loop {
+        tokio::time::sleep(Duration::from_secs(60)).await;
+    }
+}
+
+async fn show_received_messages(addr: SocketAddr, mut rx: broadcast::Receiver<(String, SocketAddr)>) {
+    let mut seen_messages = HashSet::new();
     loop {
         while let Ok((msg, _)) = rx.recv().await {
-            let message: Message = serde_json::from_str(&msg).unwrap();
-            if message.from != addr {
-                println!(
-                    "00:00:0{} - Received message [{}] from \"{}\"",
-                    period, message.content, message.from
-                );
+            let message: Message = serde_json::from_str(&msg.trim()).unwrap(); // Use trim to handle newlines
+            if message.from != addr && is_recent(message.timestamp) {
+                // Check if the message has already been seen
+                if seen_messages.insert((message.content.clone(), message.timestamp)) {
+                    println!(
+                        "00:00:00 - Received message [{}] from \"{}\"",
+                        message.content, message.from
+                    );
+                }
             }
         }
     }
@@ -107,20 +124,21 @@ async fn main() {
 
 async fn accept_connections(listener: TcpListener, peers: SharedPeers, tx: broadcast::Sender<(String, SocketAddr)>) {
     loop {
-        if let Ok((mut socket, _)) = listener.accept().await {
+        if let Ok((socket, _)) = listener.accept().await {
             let addr = socket.peer_addr().unwrap();
 
             // Read the peer's intended port
-            let mut buf = vec![0; 1024];
-            let n = socket.read(&mut buf).await.unwrap();
-            let peer_info: PeerInfo = serde_json::from_slice(&buf[..n]).unwrap();
+            let mut reader = BufReader::new(socket);
+            let mut buf = String::new();
+            reader.read_line(&mut buf).await.unwrap();
+            let peer_info: PeerInfo = serde_json::from_str(&buf).unwrap();
             let peer_addr = format!("127.0.0.1:{}", peer_info.port).parse().unwrap();
 
             println!("00:00:00 - Connected to the peer at \"{}\"", peer_addr);
             peers.lock().unwrap().insert(peer_addr);
             println!("{:?}", peers);
 
-            tokio::spawn(handle_connection(socket, peers.clone(), tx.clone()));
+            tokio::spawn(handle_connection(reader.into_inner(), peers.clone(), tx.clone()));
         }
     }
 }
@@ -131,7 +149,7 @@ async fn connect_to_peer(addr: SocketAddr, port: u16, peers: SharedPeers, tx: br
 
         // Send this peer's intended port
         let peer_info = PeerInfo { port };
-        let peer_info_json = serde_json::to_string(&peer_info).unwrap();
+        let peer_info_json = serde_json::to_string(&peer_info).unwrap() + "\n"; // Add a delimiter
         socket.write_all(peer_info_json.as_bytes()).await.unwrap();
 
         peers.lock().unwrap().insert(addr);
@@ -141,19 +159,29 @@ async fn connect_to_peer(addr: SocketAddr, port: u16, peers: SharedPeers, tx: br
 
 async fn handle_connection(mut socket: TcpStream, peers: SharedPeers, tx: broadcast::Sender<(String, SocketAddr)>) {
     let addr = socket.peer_addr().unwrap();
-    let (mut reader, mut writer) = tokio::io::split(socket);
+    let (reader, mut writer) = tokio::io::split(socket);
     let mut rx = tx.subscribe();
 
     let peers_clone = peers.clone();
     tokio::spawn(async move {
-        let mut buf = vec![0; 1024];
+        let mut reader = BufReader::new(reader);
+        let mut line = String::new();
+
         loop {
-            match reader.read_exact(&mut buf).await {
+            line.clear();
+            match reader.read_line(&mut line).await {
+                Ok(0) => {
+                    // Connection was closed
+                    peers_clone.lock().unwrap().remove(&addr);
+                    break;
+                }
                 Ok(_) => {
-                    let msg = String::from_utf8(buf.clone()).unwrap();
-                    let message: Message = serde_json::from_str(&msg).unwrap();
-                    peers_clone.lock().unwrap().insert(message.from);
-                    let _ = tx.send((msg, addr));
+                    let msg = line.trim().to_string();
+                    if !msg.is_empty() {
+                        let message: Message = serde_json::from_str(&msg).unwrap();
+                        peers_clone.lock().unwrap().insert(message.from);
+                        let _ = tx.send((msg, addr));
+                    }
                 }
                 Err(_) => {
                     peers_clone.lock().unwrap().remove(&addr);
@@ -164,10 +192,21 @@ async fn handle_connection(mut socket: TcpStream, peers: SharedPeers, tx: broadc
     });
 
     loop {
-        if let Ok((msg, _)) = rx.recv().await {
-            if let Err(_) = writer.write_all(msg.as_bytes()).await {
-                break;
+        if let Ok((msg, peer_addr)) = rx.recv().await {
+            if peer_addr != addr {
+                if let Err(_) = writer.write_all((msg + "\n").as_bytes()).await {
+                    break;
+                }
             }
         }
     }
+}
+
+fn current_timestamp() -> u64 {
+    SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs()
+}
+
+fn is_recent(timestamp: u64) -> bool {
+    let now = current_timestamp();
+    now <= timestamp + 10 // Accept messages that are at most 10 seconds old
 }
