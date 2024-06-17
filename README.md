@@ -2,7 +2,7 @@
 
 
 ## Project Structure
-\```
+```
 src
 ├── main.rs
 ├── network
@@ -10,4 +10,4 @@ src
 │   ├── message.rs
 │   └── peer.rs
 └── utils.rs
-\```
+```
