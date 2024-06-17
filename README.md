@@ -2,10 +2,12 @@
 
 
 ## Project Structure
+\```
 src
 ├── main.rs
 ├── network
-│ ├── mod.rs
-│ ├── message.rs
-│ └── peer.rs
+│   ├── mod.rs
+│   ├── message.rs
+│   └── peer.rs
 └── utils.rs
+\```
