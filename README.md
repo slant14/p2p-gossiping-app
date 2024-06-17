@@ -56,16 +56,16 @@ To start a network with three peers:
     ```bash
     cargo run -- --period=6 --port=8080
     ```
-![peer1][images/peer1.png]
+![peer1](images/peer1.png)
 
 2. Start the second peer and connect to the first peer:
     ```bash
     cargo run -- --period=6 --port=8081 --connect=127.0.0.1:8080
     ```
-![peer2][images/peer2.png]
+![peer2](images/peer2.png)
 
 3. Start the third peer and connect to the first peer:
     ```bash
     cargo run -- --period=4 --port=8082 --connect=127.0.0.1:8080
     ```
-![peer3][images/peer3.png]
+![peer3](images/peer3.png)
