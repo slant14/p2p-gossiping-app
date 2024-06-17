@@ -25,7 +25,7 @@ A peer to peer network implementation in Rust, to send random messages to peers 
 
 3. Run a peer:
     ```bash
-    cargo run --release -- --period <SECONDS> --port <PORT> [--connect <ADDRESS>]
+    cargo run -- --period=<SECONDS> --port=<PORT> [--connect=<ADDRESS>]
     ```
 
     - `--period <SECONDS>`: The period in seconds at which to send random messages.
@@ -42,3 +42,30 @@ src
 │   └── peer.rs
 └── utils.rs
 ```
+- `main.rs`: The main entry point of the application.
+- `network/mod.rs`: The module for network-related functionality.
+- `network/message.rs`: Contains message-related structs and enums.
+- `network/peer.rs`: Contains peer-related functions such as handling connections and message passing.
+- `utils.rs`: Contains utility functions for logging and timestamp handling.
+
+## Example
+
+To start a network with three peers:
+
+1. Start the first peer:
+    ```bash
+    cargo run -- --period=6 --port=8080
+    ```
+![peer1][images/peer1.png]
+
+2. Start the second peer and connect to the first peer:
+    ```bash
+    cargo run -- --period=6 --port=8081 --connect=127.0.0.1:8080
+    ```
+![peer2][images/peer2.png]
+
+3. Start the third peer and connect to the first peer:
+    ```bash
+    cargo run -- --period=4 --port=8082 --connect=127.0.0.1:8080
+    ```
+![peer3][images/peer3.png]
