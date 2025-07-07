@@ -1,4 +1,6 @@
 # P2P Gossiping App
+
+[![License](https://img.shields.io/github/license/R3v1k/EnergyCostSavingEstimator?style=for-the-badge&cacheSeconds=0)](LICENSE)
 A peer to peer network implementation in Rust, to send random messages to peers in the network in the specifiec pre-defined time periods.
 
 ## Features
